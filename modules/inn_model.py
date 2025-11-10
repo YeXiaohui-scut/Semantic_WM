@@ -6,6 +6,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# Import QR_SIZE from pattern_util
+from modules.pattern_util import QR_SIZE
+
 
 class SubNetwork(nn.Module):
     """
@@ -35,10 +38,12 @@ class InvBlock(nn.Module):
     """
     def __init__(self, channels):
         super(InvBlock, self).__init__()
+        # channels is the total number of channels (will be split in half)
+        half_channels = channels // 2
         # Three sub-networks: φ, ρ, η
-        self.phi = SubNetwork(channels, channels)
-        self.rho = SubNetwork(channels, channels)
-        self.eta = SubNetwork(channels, channels)
+        self.phi = SubNetwork(half_channels, half_channels)
+        self.rho = SubNetwork(half_channels, half_channels)
+        self.eta = SubNetwork(half_channels, half_channels)
     
     def forward(self, x, v):
         """
@@ -46,7 +51,7 @@ class InvBlock(nn.Module):
         
         Args:
             x (torch.Tensor): Carrier features (I^i)
-            v (torch.Tensor): Watermark pattern (V)
+            v (torch.Tensor): Watermark pattern (V) - should have half channels
         
         Returns:
             torch.Tensor: Watermarked features (I^{i+1})
@@ -56,6 +61,7 @@ class InvBlock(nn.Module):
         
         # Forward coupling equations (MetaSeal Eq. 9-10)
         y1 = x1 + self.phi(x2)
+        # v should already be projected to the correct size
         y2 = x2 + self.rho(y1) + self.eta(v)
         
         # Concatenate back
@@ -180,8 +186,8 @@ class INNModel(nn.Module):
             InvBlock(channels * 4) for _ in range(num_blocks)
         ])
         
-        # Projection layer for QR code to match DWT dimensions
-        self.qr_proj = nn.Conv2d(1, channels * 4, kernel_size=1)
+        # Projection layer for QR code to match DWT half dimensions
+        self.qr_proj = nn.Conv2d(1, channels * 2, kernel_size=1)  # Half of DWT channels
     
     def forward(self, x_T, V):
         """
@@ -197,9 +203,9 @@ class INNModel(nn.Module):
         # Apply DWT to noise
         I = self.dwt(x_T)
         
-        # Resize QR code to match DWT dimensions
+        # Resize QR code to match DWT dimensions (H/2, W/2 after DWT)
         B, _, H, W = I.shape
-        V_resized = F.interpolate(V, size=(H//4, W//4), mode='nearest')
+        V_resized = F.interpolate(V, size=(H, W), mode='bilinear', align_corners=False)
         V_proj = self.qr_proj(V_resized)
         
         # Pass through invertible blocks
@@ -228,7 +234,7 @@ class INNModel(nn.Module):
         # Get dimensions for auxiliary noise
         B, C, H, W = I.shape
         z_dwt = self.dwt(z)
-        z_resized = F.interpolate(z_dwt, size=(H//4, W//4), mode='nearest')[:, :C]
+        z_resized = F.interpolate(z_dwt, size=(H, W), mode='bilinear', align_corners=False)[:, :C//2]
         
         # Pass through invertible blocks in reverse
         v_list = []
@@ -238,6 +244,6 @@ class INNModel(nn.Module):
         
         # Average extracted watermarks and project back to QR size
         v_avg = torch.stack(v_list).mean(dim=0)
-        V_hat = F.interpolate(v_avg[:, :1], size=(53, 53), mode='bilinear', align_corners=False)
+        V_hat = F.interpolate(v_avg[:, :1], size=(QR_SIZE, QR_SIZE), mode='bilinear', align_corners=False)
         
         return V_hat

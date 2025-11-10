@@ -12,7 +12,7 @@ from pyzbar import pyzbar
 
 
 SEPARATOR = b'|||SEP|||'  # Special separator for message and signature
-QR_SIZE = 53  # Fixed QR code size
+QR_SIZE = 128  # Fixed QR code size (larger for better decoding)
 
 
 def encode_to_qr(message_str, signature_bytes):
@@ -34,10 +34,10 @@ def encode_to_qr(message_str, signature_bytes):
     
     # Generate QR code
     qr = qrcode.QRCode(
-        version=1,
+        version=None,  # Auto-size
         error_correction=qrcode.constants.ERROR_CORRECT_H,
-        box_size=1,
-        border=1,
+        box_size=10,
+        border=4,
     )
     qr.add_data(packed_data)
     qr.make(fit=True)
@@ -46,7 +46,7 @@ def encode_to_qr(message_str, signature_bytes):
     qr_img = qr.make_image(fill_color="black", back_color="white")
     
     # Resize to fixed size
-    qr_img = qr_img.resize((QR_SIZE, QR_SIZE), Image.NEAREST)
+    qr_img = qr_img.resize((QR_SIZE, QR_SIZE), Image.LANCZOS)
     
     # Convert to numpy array and normalize to 0-1
     qr_array = np.array(qr_img.convert('L'))
@@ -77,8 +77,11 @@ def decode_from_qr(qr_tensor):
         else:
             qr_array = qr_tensor.cpu().numpy()
         
-        # Binarize: threshold at 0.5
+        # Binarize: threshold at 0.5 and convert to 0-255 range
         qr_array = (qr_array > 0.5).astype(np.uint8) * 255
+        
+        # Invert: QR codes need black on white
+        qr_array = 255 - qr_array
         
         # Convert to PIL Image
         qr_img = Image.fromarray(qr_array, mode='L')
